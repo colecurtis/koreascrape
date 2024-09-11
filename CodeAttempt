@@ -1,0 +1,168 @@
+# This code combines the downloading of Excel files and the cleaning of the dataset
+# Note: This code is not being executed, just displayed
+
+import pandas as pd
+from selenium import webdriver
+from selenium.webdriver.firefox.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.keys import Keys
+import time
+import os
+
+def download_excel_files(country_codes, item_code):
+    # Set up Firefox options with a custom download directory
+    firefox_options = Options()
+    firefox_options.add_argument("--headless")
+    profile = webdriver.FirefoxProfile()
+    profile.set_preference("browser.download.folderList", 2)
+    profile.set_preference("browser.download.manager.showWhenStarting", False)
+    profile.set_preference("browser.download.dir", os.getcwd())
+    profile.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/vnd.ms-excel")
+
+    # Initialize the driver with the profile
+    driver = webdriver.Firefox(firefox_profile=profile, options=firefox_options)
+    url = "https://www.kita.org/kStatistics/commodity/byCountries/countriesDetail.do"
+
+    for country_code in country_codes:
+        driver.get(url)
+        try:
+            # Wait for the page to load
+            time.sleep(5)
+            
+            # Fill country field
+            country_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "searchCountryCode"))
+            )
+            country_input.clear()
+            country_input.send_keys(country_code)
+            country_input.send_keys(Keys.TAB)
+            
+            # Fill item field
+            item_input = WebDriverWait(driver, 10).until(
+                EC.presence_of_element_located((By.ID, "searchCondUnitNum"))
+            )
+            item_input.clear()
+            item_input.send_keys(item_code)
+            item_input.send_keys(Keys.TAB)
+            
+            # Click search button
+            search_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Search')]"))
+            )
+            search_button.click()
+            
+            # Wait for results and click download
+            time.sleep(5)
+            download_button = WebDriverWait(driver, 10).until(
+                EC.element_to_be_clickable((By.XPATH, "//button[contains(text(), 'Download')]"))
+            )
+            download_button.click()
+            
+            print(f"Downloaded file for country: {country_code}")
+            time.sleep(5)  # Wait for download to complete
+            
+        except Exception as e:
+            print(f"Error processing country {country_code}: {str(e)}")
+
+    driver.quit()
+    print("All downloads completed.")
+
+def process_excel_file(file_path):
+    df = pd.read_excel(file_path, header=None)
+    
+    # Extract country and HS code
+    country = df.iloc[1, 0].split(':')[1].strip()
+    hs_code = df.iloc[1, 1].split(':')[1].strip()
+    
+    # Find the row where the actual data starts
+    start_row = df.index[df.iloc[:, 0].astype(str).str.contains('Year', case=False, na=False)].tolist()
+    
+    if not start_row:
+        print(f"No 'Year' column found in {file_path}")
+        return None
+    
+    start_row = start_row[0]
+    
+    # Extract data
+    data = df.iloc[start_row:, [0, 7]]  # Year and Export Quantities
+    data.columns = ['Date', 'Export Quantities']
+    data['Country'] = country
+    data['HS Code'] = hs_code
+    
+    # Remove any rows where Date is not a year (e.g., headers, footers)
+    data = data[data['Date'].astype(str).str.isnumeric()]
+    
+    return data
+
+def clean_and_process_data():
+    # Process all Excel files
+    combined_data = []
+    excel_files = [f for f in os.listdir('.') if f.endswith('.xlsx') and f.startswith('K-Statistics')]
+
+    for file in excel_files:
+        try:
+            data = process_excel_file(file)
+            if data is not None and not data.empty:
+                combined_data.append(data)
+        except Exception as e:
+            print(f"Error processing file {file}: {str(e)}")
+
+    # Concatenate all dataframes
+    df = pd.concat(combined_data, ignore_index=True)
+
+    # Clean up the Country and HS Code columns
+    df['Country'] = df['Country'].str.split(',').str[0]
+    df['HS Code'] = '8703231020'  # Set the correct HS code
+
+    # Convert Export Quantities to numeric, replacing any non-numeric values with NaN
+    df['Export Quantities'] = pd.to_numeric(df['Export Quantities'], errors='coerce')
+
+    # Convert Date to datetime
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y')
+
+    # Sort the dataframe by Country and Date
+    df = df.sort_values(['Country', 'Date'])
+
+    # Save the cleaned data
+    df.to_excel('Cleaned_Combined_Export_Data.xlsx', index=False)
+    print("Cleaned data saved to 'Cleaned_Combined_Export_Data.xlsx'")
+
+    return df
+
+def main():
+    # List of country codes (this is a sample, you can extend it)
+    country_codes = ['AD', 'AE', 'AF', 'AG', 'AI', 'AL', 'AM', 'AN']
+    item_code = '8703231020'
+
+    # Download Excel files
+    download_excel_files(country_codes, item_code)
+
+    # Clean and process the data
+    df = clean_and_process_data()
+
+    # Display some statistics
+    print("\
+Dataset Statistics:")
+    print(f"Total number of rows: {len(df)}")
+    print(f"Number of unique countries: {df['Country'].nunique()}")
+    print(f"Date range: {df['Date'].min().year} to {df['Date'].max().year}")
+
+    print("\
+Top 5 countries by number of entries:")
+    print(df['Country'].value_counts().head())
+
+    print("\
+Export Quantities Summary Statistics:")
+    print(df['Export Quantities'].describe())
+
+    print("\
+Top 5 countries by total export quantities:")
+    top_exporters = df.groupby('Country')['Export Quantities'].sum().sort_values(ascending=False).head()
+    print(top_exporters)
+
+# Uncomment the following line to run the script
+# main()
+
+print("Code combined successfully. To run, uncomment the main() call at the end of the script.")
